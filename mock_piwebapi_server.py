@@ -161,7 +161,10 @@ class PiWebApiDataModel:
             ("Setpoint", "unit"),
         ]
 
-        attrs = base_attrs + (leaf_attrs if is_leaf else [])
+        # Ensure each element has at least one attribute name unique to that element.
+        unique_suffix = element.web_id[-8:]
+        unique_attr = (f"UniqueTag_{unique_suffix}", "id")
+        attrs = base_attrs + (leaf_attrs if is_leaf else []) + [unique_attr]
         for attr_name, unit in attrs:
             attr_path = f"{element.path}|{attr_name}"
             web_id = self._mk_web_id("attribute", attr_path)
