@@ -39,6 +39,8 @@ class Attribute:
     element_web_id: str
     units: str
     data_type: str = "Double"
+    parent_attribute_web_id: Optional[str] = None
+    children: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -165,20 +167,63 @@ class PiWebApiDataModel:
         unique_suffix = element.web_id[-8:]
         unique_attr = (f"UniqueTag_{unique_suffix}", "id")
         attrs = base_attrs + (leaf_attrs if is_leaf else []) + [unique_attr]
+        created: Dict[str, Attribute] = {}
         for attr_name, unit in attrs:
-            attr_path = f"{element.path}|{attr_name}"
-            web_id = self._mk_web_id("attribute", attr_path)
-            attribute = Attribute(
-                web_id=web_id,
-                name=attr_name,
-                path=attr_path,
-                element_web_id=element.web_id,
-                units=unit,
+            attribute = self._create_attribute(
+                element=element,
+                attr_name=attr_name,
+                unit=unit,
                 data_type="Int32" if attr_name == "Status" else "Double",
+                parent_attribute_web_id=None,
             )
-            self.attributes_by_webid[web_id] = attribute
-            self.attributes_by_path[attr_path.lower()] = attribute
+            created[attr_name] = attribute
+
+        # Ensure at least one sub-attribute exists under regular attributes.
+        temperature_attr = created.get("Temperature_C")
+        if temperature_attr:
+            self._create_attribute(
+                element=element,
+                attr_name="SensorOffset_C",
+                unit="degC",
+                data_type="Double",
+                parent_attribute_web_id=temperature_attr.web_id,
+            )
+
+    def _create_attribute(
+        self,
+        element: Element,
+        attr_name: str,
+        unit: str,
+        data_type: str,
+        parent_attribute_web_id: Optional[str],
+    ) -> Attribute:
+        if parent_attribute_web_id:
+            parent = self.get_attribute(parent_attribute_web_id)
+            if not parent:
+                raise ValueError("Parent attribute does not exist")
+            attr_path = f"{parent.path}|{attr_name}"
+        else:
+            attr_path = f"{element.path}|{attr_name}"
+
+        web_id = self._mk_web_id("attribute", attr_path)
+        attribute = Attribute(
+            web_id=web_id,
+            name=attr_name,
+            path=attr_path,
+            element_web_id=element.web_id,
+            units=unit,
+            data_type=data_type,
+            parent_attribute_web_id=parent_attribute_web_id,
+        )
+        self.attributes_by_webid[web_id] = attribute
+        self.attributes_by_path[attr_path.lower()] = attribute
+        if parent_attribute_web_id:
+            parent = self.get_attribute(parent_attribute_web_id)
+            if parent:
+                parent.children.append(web_id)
+        else:
             element.attributes.append(web_id)
+        return attribute
 
     def list_databases(self) -> List[AssetDatabase]:
         return list(self.databases_by_webid.values())
@@ -358,8 +403,10 @@ class PiWebApiHandler(BaseHTTPRequestHandler):
             "Path": attr.path,
             "Type": attr.data_type,
             "DefaultUnitsName": attr.units,
+            "HasChildren": bool(attr.children),
             "Links": {
                 "Self": f"{base}/attributes/{attr.web_id}",
+                "Attributes": f"{base}/attributes/{attr.web_id}/attributes",
                 "Value": f"{base}/streams/{attr.web_id}/value",
                 "RecordedData": f"{base}/streams/{attr.web_id}/recorded",
             },
@@ -579,6 +626,17 @@ class PiWebApiHandler(BaseHTTPRequestHandler):
                     if fnmatch.fnmatch(attr.name.lower(), name_pattern_lc):
                         items.append(self._attribute_item(attr))
 
+            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
+            return
+
+        m = re.match(r"^/piwebapi/attributes/([^/]+)/attributes$", path)
+        if m:
+            attr = self.model.get_attribute(m.group(1))
+            if not attr:
+                self._error(HTTPStatus.NOT_FOUND, "Attribute not found")
+                return
+            items = [self._attribute_item(self.model.get_attribute(cid)) for cid in attr.children]
+            items = [it for it in items if it is not None]
             self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
             return
 

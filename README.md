@@ -68,6 +68,7 @@ This yields thousands of elements and attributes across the 3 databases.
 - `GET /piwebapi/elements/{elementWebId}/elements`
 - `GET /piwebapi/elements/{elementWebId}/attributes`
 - `GET /piwebapi/attributes/search?databaseWebId={dbWebId}&query=Element:{Root:'Area-01\\Line-02\\Unit-02\\Station-01\\Cell-01' Name:'*'}`
+- `GET /piwebapi/attributes/{attributeWebId}/attributes` (sub-attributes)
 - `GET /piwebapi/attributes/{attributeWebId}`
 - `GET /piwebapi/streams/{attributeWebId}/value?time=2025-01-01T10:00:00Z`
 - `GET /piwebapi/streams/{attributeWebId}/recorded?startTime=2025-01-01T00:00:00Z&endTime=2025-01-01T03:00:00Z&interval=15m`
