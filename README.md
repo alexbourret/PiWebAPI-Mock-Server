@@ -78,6 +78,7 @@ This yields thousands of elements and attributes across the 3 databases.
 - `GET /piwebapi/attributes/{attributeWebId}`
 - `GET /piwebapi/streams/{attributeWebId}/value?time=2025-01-01T10:00:00Z`
 - `GET /piwebapi/streams/{attributeWebId}/recorded?startTime=2025-01-01T00:00:00Z&endTime=2025-01-01T03:00:00Z&interval=15m`
+- `POST /piwebapi/batch`
 
 ## Deterministic Values
 
@@ -94,6 +95,47 @@ So if you request the same attribute and same timestamp/time range twice, return
 - Attributes expose `TemplateName` and `Links.Template`.
 - At least one template has a base template (`BaseTemplateName` + `Links.BaseTemplate`), e.g.:
   - `TPL_Cell` base template is `TPL_Station`
+
+## Batch Endpoint
+
+Batch endpoint:
+
+```text
+POST /piwebapi/batch
+```
+
+The request body is a JSON object keyed by request IDs. Each request supports:
+- `Method`
+- `Resource` (or `RequestTemplate.Resource`)
+- `ParentIds`
+- `Parameters` (JsonPath against previous batch results)
+- `Content`
+
+Example:
+
+```json
+{
+  "1": {
+    "Method": "GET",
+    "Resource": "/piwebapi/assetservers"
+  },
+  "2": {
+    "Method": "GET",
+    "Resource": "/piwebapi/assetservers/{0}/assetdatabases",
+    "ParentIds": [
+      "1"
+    ],
+    "Parameters": [
+      "$.1.Content.Items[0].WebId"
+    ]
+  }
+}
+```
+
+Response is keyed by the same request IDs and includes per-item:
+- `Status`
+- `Headers`
+- `Content`
 
 ## Quick Example
 

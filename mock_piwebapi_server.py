@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 
@@ -740,70 +740,48 @@ class PiWebApiHandler(BaseHTTPRequestHandler):
 
         return None
 
-    def do_GET(self) -> None:  # noqa: N802
-        parsed = urlparse(self.path)
-        path = parsed.path.rstrip("/") or "/"
-        query = parse_qs(parsed.query)
-        query_ci = {k.lower(): v for k, v in query.items()}
-
-        if path.startswith("/piwebapi") and not self._auth_ok():
-            self._unauthorized("Missing or invalid basic authentication credentials")
-            return
-
+    def _handle_get_internal(self, path: str, query_ci: Dict[str, List[str]]) -> Tuple[int, Dict[str, Any]]:
         if path == "/" or path == "/piwebapi":
-            self._write_json(
-                HTTPStatus.OK,
-                {
-                    "ProductVersion": "Mock-1.0",
-                    "Links": {
-                        "AssetServers": f"{self._base_url()}/assetservers",
-                    },
+            return HTTPStatus.OK, {
+                "ProductVersion": "Mock-1.0",
+                "Links": {
+                    "AssetServers": f"{self._base_url()}/assetservers",
                 },
-            )
-            return
+            }
 
         if path == "/piwebapi/assetservers":
             item = self._asset_server_item()
-            self._write_json(HTTPStatus.OK, {"Items": [item], "Total": 1})
-            return
+            return HTTPStatus.OK, {"Items": [item], "Total": 1}
 
         m = re.match(r"^/piwebapi/assetservers/([^/]+)$", path)
         if m:
             if m.group(1) != self.asset_server_web_id:
-                self._error(HTTPStatus.NOT_FOUND, "Asset server not found")
-                return
-            self._write_json(HTTPStatus.OK, self._asset_server_item())
-            return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Asset server not found"]}
+            return HTTPStatus.OK, self._asset_server_item()
 
         m = re.match(r"^/piwebapi/assetservers/([^/]+)/assetdatabases$", path)
         if m:
             if m.group(1) != self.asset_server_web_id:
-                self._error(HTTPStatus.NOT_FOUND, "Asset server not found")
-                return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Asset server not found"]}
             items = [self._db_item(db) for db in self.model.list_databases()]
-            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
-            return
+            return HTTPStatus.OK, {"Items": items, "Total": len(items)}
 
         if path == "/piwebapi/assetdatabases":
             items = [self._db_item(db) for db in self.model.list_databases()]
-            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
-            return
+            return HTTPStatus.OK, {"Items": items, "Total": len(items)}
 
         m = re.match(r"^/piwebapi/assetdatabases/([^/]+)$", path)
         if m:
             db = self.model.get_database(m.group(1))
             if not db:
-                self._error(HTTPStatus.NOT_FOUND, "Asset database not found")
-                return
-            self._write_json(HTTPStatus.OK, self._db_item(db))
-            return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Asset database not found"]}
+            return HTTPStatus.OK, self._db_item(db)
 
         m = re.match(r"^/piwebapi/assetdatabases/([^/]+)/elements$", path)
         if m:
             db = self.model.get_database(m.group(1))
             if not db:
-                self._error(HTTPStatus.NOT_FOUND, "Asset database not found")
-                return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Asset database not found"]}
 
             path_q = query_ci.get("path", [None])[0]
             if path_q:
@@ -817,111 +795,90 @@ class PiWebApiHandler(BaseHTTPRequestHandler):
                     items = [self._element_item(self.model.get_element(cid)) for cid in root.children]
                     items = [it for it in items if it is not None]
 
-            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
-            return
+            return HTTPStatus.OK, {"Items": items, "Total": len(items)}
 
         m = re.match(r"^/piwebapi/assetdatabases/([^/]+)/elementtemplates$", path)
         if m:
             db = self.model.get_database(m.group(1))
             if not db:
-                self._error(HTTPStatus.NOT_FOUND, "Asset database not found")
-                return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Asset database not found"]}
             items = [self._element_template_item(t) for t in self.model.list_element_templates_for_database(db.web_id)]
-            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
-            return
+            return HTTPStatus.OK, {"Items": items, "Total": len(items)}
 
         if path == "/piwebapi/elementtemplates":
             items = [self._element_template_item(t) for t in self.model.list_element_templates()]
-            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
-            return
+            return HTTPStatus.OK, {"Items": items, "Total": len(items)}
 
         m = re.match(r"^/piwebapi/elementtemplates/([^/]+)/attributetemplates$", path)
         if m:
             tpl = self.model.get_element_template(m.group(1))
             if not tpl:
-                self._error(HTTPStatus.NOT_FOUND, "Element template not found")
-                return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Element template not found"]}
             attr_tpls = self.model.effective_attribute_templates(tpl.web_id)
             items = [self._attribute_template_item(t) for t in attr_tpls]
-            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
-            return
+            return HTTPStatus.OK, {"Items": items, "Total": len(items)}
 
         m = re.match(r"^/piwebapi/elementtemplates/([^/]+)$", path)
         if m:
             tpl = self.model.get_element_template(m.group(1))
             if not tpl:
-                self._error(HTTPStatus.NOT_FOUND, "Element template not found")
-                return
-            self._write_json(HTTPStatus.OK, self._element_template_item(tpl))
-            return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Element template not found"]}
+            return HTTPStatus.OK, self._element_template_item(tpl)
 
         m = re.match(r"^/piwebapi/attributetemplates/([^/]+)/attributetemplates$", path)
         if m:
             tpl = self.model.get_attribute_template(m.group(1))
             if not tpl:
-                self._error(HTTPStatus.NOT_FOUND, "Attribute template not found")
-                return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Attribute template not found"]}
             items = [self._attribute_template_item(self.model.get_attribute_template(cid)) for cid in tpl.children]
             items = [it for it in items if it is not None]
-            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
-            return
+            return HTTPStatus.OK, {"Items": items, "Total": len(items)}
 
         m = re.match(r"^/piwebapi/attributetemplates/([^/]+)$", path)
         if m:
             tpl = self.model.get_attribute_template(m.group(1))
             if not tpl:
-                self._error(HTTPStatus.NOT_FOUND, "Attribute template not found")
-                return
-            self._write_json(HTTPStatus.OK, self._attribute_template_item(tpl))
-            return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Attribute template not found"]}
+            return HTTPStatus.OK, self._attribute_template_item(tpl)
 
         m = re.match(r"^/piwebapi/elements/([^/]+)$", path)
         if m:
             elem = self.model.get_element(m.group(1))
             if not elem:
-                self._error(HTTPStatus.NOT_FOUND, "Element not found")
-                return
-            self._write_json(HTTPStatus.OK, self._element_item(elem))
-            return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Element not found"]}
+            return HTTPStatus.OK, self._element_item(elem)
 
         m = re.match(r"^/piwebapi/elements/([^/]+)/elements$", path)
         if m:
             elem = self.model.get_element(m.group(1))
             if not elem:
-                self._error(HTTPStatus.NOT_FOUND, "Element not found")
-                return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Element not found"]}
             items = [self._element_item(self.model.get_element(cid)) for cid in elem.children]
             items = [it for it in items if it is not None]
-            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
-            return
+            return HTTPStatus.OK, {"Items": items, "Total": len(items)}
 
         m = re.match(r"^/piwebapi/elements/([^/]+)/attributes$", path)
         if m:
             elem = self.model.get_element(m.group(1))
             if not elem:
-                self._error(HTTPStatus.NOT_FOUND, "Element not found")
-                return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Element not found"]}
             items = [self._attribute_item(self.model.get_attribute(aid)) for aid in elem.attributes]
             items = [it for it in items if it is not None]
-            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
-            return
+            return HTTPStatus.OK, {"Items": items, "Total": len(items)}
 
         if path == "/piwebapi/attributes/search":
             db_web_id = (query_ci.get("databasewebid", [None])[0] or "").strip()
             if not db_web_id:
-                self._error(HTTPStatus.BAD_REQUEST, "Missing required parameter: databaseWebId")
-                return
+                return HTTPStatus.BAD_REQUEST, {"Errors": ["Missing required parameter: databaseWebId"]}
             db = self.model.get_database(db_web_id)
             if not db:
-                self._error(HTTPStatus.NOT_FOUND, "Asset database not found")
-                return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Asset database not found"]}
 
             search_expr = (query_ci.get("query", [""])[0] or "").strip()
             root_expr, name_pattern = self._parse_attribute_search_query(search_expr)
             root_elem = self._resolve_root_element_for_search(db, root_expr)
             if not root_elem:
-                self._write_json(HTTPStatus.OK, {"Items": [], "Total": 0})
-                return
+                return HTTPStatus.OK, {"Items": [], "Total": 0}
 
             name_pattern_lc = name_pattern.lower()
             items: List[dict] = []
@@ -936,72 +893,61 @@ class PiWebApiHandler(BaseHTTPRequestHandler):
                     if fnmatch.fnmatch(attr.name.lower(), name_pattern_lc):
                         items.append(self._attribute_item(attr))
 
-            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
-            return
+            return HTTPStatus.OK, {"Items": items, "Total": len(items)}
 
         m = re.match(r"^/piwebapi/attributes/([^/]+)/attributes$", path)
         if m:
             attr = self.model.get_attribute(m.group(1))
             if not attr:
-                self._error(HTTPStatus.NOT_FOUND, "Attribute not found")
-                return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Attribute not found"]}
             items = [self._attribute_item(self.model.get_attribute(cid)) for cid in attr.children]
             items = [it for it in items if it is not None]
-            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
-            return
+            return HTTPStatus.OK, {"Items": items, "Total": len(items)}
 
         m = re.match(r"^/piwebapi/attributes/([^/]+)$", path)
         if m:
             attr = self.model.get_attribute(m.group(1))
             if not attr:
-                self._error(HTTPStatus.NOT_FOUND, "Attribute not found")
-                return
-            self._write_json(HTTPStatus.OK, self._attribute_item(attr))
-            return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Attribute not found"]}
+            return HTTPStatus.OK, self._attribute_item(attr)
 
         m = re.match(r"^/piwebapi/streams/([^/]+)/value$", path)
         if m:
             attr = self.model.get_attribute(m.group(1))
             if not attr:
-                self._error(HTTPStatus.NOT_FOUND, "Attribute not found")
-                return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Attribute not found"]}
             now = datetime.now(timezone.utc)
-            t = parse_time(query_ci.get("time", [None])[0], now)
+            try:
+                t = parse_time(query_ci.get("time", [None])[0], now)
+            except ValueError:
+                return HTTPStatus.BAD_REQUEST, {"Errors": ["Invalid timestamp format for time. Expected ISO-8601."]}
             value = self.model.deterministic_value(attr, t)
-            self._write_json(
-                HTTPStatus.OK,
-                {
-                    "Timestamp": t.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "Value": value,
-                    "Good": True,
-                    "Questionable": False,
-                    "Substituted": False,
-                },
-            )
-            return
+            return HTTPStatus.OK, {
+                "Timestamp": t.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "Value": value,
+                "Good": True,
+                "Questionable": False,
+                "Substituted": False,
+            }
 
         m = re.match(r"^/piwebapi/streams/([^/]+)/recorded$", path)
         if m:
             attr = self.model.get_attribute(m.group(1))
             if not attr:
-                self._error(HTTPStatus.NOT_FOUND, "Attribute not found")
-                return
+                return HTTPStatus.NOT_FOUND, {"Errors": ["Attribute not found"]}
 
             now = datetime.now(timezone.utc)
             try:
                 start = parse_time(query_ci.get("starttime", [None])[0], now - timedelta(hours=8))
                 end = parse_time(query_ci.get("endtime", [None])[0], now)
             except ValueError:
-                self._error(
-                    HTTPStatus.BAD_REQUEST,
-                    "Invalid timestamp format for startTime/endTime. Expected ISO-8601.",
-                )
-                return
+                return HTTPStatus.BAD_REQUEST, {
+                    "Errors": ["Invalid timestamp format for startTime/endTime. Expected ISO-8601."]
+                }
             step = parse_interval(query_ci.get("interval", [None])[0], fallback=timedelta(minutes=15))
 
             if end < start:
-                self._error(HTTPStatus.BAD_REQUEST, "endTime must be greater than or equal to startTime")
-                return
+                return HTTPStatus.BAD_REQUEST, {"Errors": ["endTime must be greater than or equal to startTime"]}
 
             items = []
             for ts in datetime_list(start, end, step):
@@ -1015,18 +961,287 @@ class PiWebApiHandler(BaseHTTPRequestHandler):
                         "Substituted": False,
                     }
                 )
+            return HTTPStatus.OK, {
+                "Items": items,
+                "UnitsAbbreviation": attr.units,
+                "Total": len(items),
+            }
 
-            self._write_json(
-                HTTPStatus.OK,
-                {
-                    "Items": items,
-                    "UnitsAbbreviation": attr.units,
-                    "Total": len(items),
-                },
-            )
+        return HTTPStatus.NOT_FOUND, {"Errors": [f"Unsupported endpoint: {path}"]}
+
+    def _batch_read_json(self) -> Tuple[bool, Any, str]:
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return False, None, "Invalid Content-Length"
+        raw = self.rfile.read(content_length) if content_length > 0 else b""
+        if not raw:
+            return False, None, "Request body is required"
+        try:
+            return True, json.loads(raw.decode("utf-8")), ""
+        except Exception:
+            return False, None, "Invalid JSON payload"
+
+    def _ci_get(self, obj: Dict[str, Any], key: str, default: Any = None) -> Any:
+        if key in obj:
+            return obj[key]
+        kl = key.lower()
+        for k, v in obj.items():
+            if k.lower() == kl:
+                return v
+        return default
+
+    def _parse_json_path(self, expr: str, data: Any) -> List[Any]:
+        if not expr.startswith("$"):
+            raise ValueError("JsonPath must start with '$'")
+        nodes = [data]
+        i = 1
+        n = len(expr)
+        while i < n:
+            ch = expr[i]
+            if ch == ".":
+                i += 1
+                start = i
+                while i < n and expr[i] not in ".[":
+                    i += 1
+                key = expr[start:i]
+                if not key:
+                    raise ValueError(f"Invalid JsonPath segment in {expr}")
+                next_nodes: List[Any] = []
+                for node in nodes:
+                    if isinstance(node, dict) and key in node:
+                        next_nodes.append(node[key])
+                nodes = next_nodes
+            elif ch == "[":
+                end = expr.find("]", i)
+                if end < 0:
+                    raise ValueError(f"Unclosed bracket in JsonPath: {expr}")
+                token = expr[i + 1 : end].strip()
+                next_nodes = []
+                if token == "*":
+                    for node in nodes:
+                        if isinstance(node, list):
+                            next_nodes.extend(node)
+                        elif isinstance(node, dict):
+                            next_nodes.extend(node.values())
+                else:
+                    try:
+                        idx = int(token)
+                    except ValueError as e:
+                        raise ValueError(f"Unsupported bracket token '{token}' in JsonPath") from e
+                    for node in nodes:
+                        if isinstance(node, list) and -len(node) <= idx < len(node):
+                            next_nodes.append(node[idx])
+                nodes = next_nodes
+                i = end + 1
+            else:
+                raise ValueError(f"Unexpected token '{ch}' in JsonPath: {expr}")
+        return nodes
+
+    def _format_with_params(self, template: str, resolved_params: List[List[Any]], expand_index: int = 0) -> str:
+        values: List[str] = []
+        for vals in resolved_params:
+            if not vals:
+                raise ValueError("Parameter resolved to empty set")
+            pick = vals[expand_index] if len(vals) > 1 else vals[0]
+            values.append(str(pick))
+        return template.format(*values)
+
+    def _batch_expand_count(self, resolved_params: List[List[Any]]) -> int:
+        if not resolved_params:
+            return 1
+        max_len = max(len(v) for v in resolved_params)
+        for vals in resolved_params:
+            if len(vals) not in (1, max_len):
+                raise ValueError("Parameter expansion size mismatch")
+        return max_len
+
+    def _normalize_resource(self, resource: str, batch_results: Dict[str, Any]) -> str:
+        value = resource.strip()
+        if value.startswith("$"):
+            resolved = self._parse_json_path(value, batch_results)
+            if not resolved:
+                raise ValueError(f"JsonPath resource did not resolve: {value}")
+            value = str(resolved[0])
+        parsed = urlparse(value)
+        if parsed.scheme in ("http", "https"):
+            expected_host = self.headers.get("Host", f"localhost:{self.server.server_port}")
+            if parsed.netloc.lower() != expected_host.lower():
+                raise ValueError("External hosts are not allowed in batch resource URLs")
+            path = parsed.path
+            if not path.startswith("/piwebapi"):
+                raise ValueError("Absolute batch resource URL must target /piwebapi")
+            return path + (f"?{parsed.query}" if parsed.query else "")
+        if value.startswith("/"):
+            return value
+        if value.startswith("piwebapi"):
+            return "/" + value
+        return f"/piwebapi/{value.lstrip('/')}"
+
+    def _execute_internal_request(
+        self, method: str, resource: str, body: Optional[Any], batch_results: Dict[str, Any]
+    ) -> Tuple[int, Dict[str, str], Any]:
+        norm = self._normalize_resource(resource, batch_results)
+        parsed = urlparse(norm)
+        path = parsed.path.rstrip("/") or "/"
+        query = parse_qs(parsed.query)
+        query_ci = {k.lower(): v for k, v in query.items()}
+
+        m = method.upper()
+        if m == "GET":
+            status, payload = self._handle_get_internal(path, query_ci)
+            return int(status), {"Content-Type": "application/json"}, payload
+        if m == "POST" and path == "/piwebapi/batch":
+            return 400, {"Content-Type": "application/json"}, {"Errors": ["Nested batch requests are not supported"]}
+        return 405, {"Content-Type": "application/json"}, {"Errors": [f"Method {m} is not supported by this mock"]}
+
+    def _topological_order(self, requests: Dict[str, Dict[str, Any]]) -> List[str]:
+        indegree: Dict[str, int] = {rid: 0 for rid in requests}
+        edges: Dict[str, List[str]] = {rid: [] for rid in requests}
+        for rid, req in requests.items():
+            for pid in req["parent_ids"]:
+                if pid not in requests:
+                    raise ValueError(f"Unknown ParentId '{pid}' referenced by '{rid}'")
+                edges[pid].append(rid)
+                indegree[rid] += 1
+        queue = [rid for rid, deg in indegree.items() if deg == 0]
+        order: List[str] = []
+        while queue:
+            cur = queue.pop(0)
+            order.append(cur)
+            for nxt in edges[cur]:
+                indegree[nxt] -= 1
+                if indegree[nxt] == 0:
+                    queue.append(nxt)
+        if len(order) != len(requests):
+            raise ValueError("Batch ParentIds contain a cycle")
+        return order
+
+    def _normalize_batch_request(self, request_id: str, raw: Any) -> Dict[str, Any]:
+        if not isinstance(raw, dict):
+            raise ValueError(f"Batch item '{request_id}' must be an object")
+        method = str(self._ci_get(raw, "Method", "GET")).upper()
+        resource = self._ci_get(raw, "Resource")
+        request_template = self._ci_get(raw, "RequestTemplate")
+        parent_ids = self._ci_get(raw, "ParentIds", []) or []
+        parameters = self._ci_get(raw, "Parameters", []) or []
+        content = self._ci_get(raw, "Content")
+
+        if not isinstance(parent_ids, list):
+            raise ValueError(f"ParentIds for '{request_id}' must be an array")
+        if not isinstance(parameters, list):
+            raise ValueError(f"Parameters for '{request_id}' must be an array")
+        if resource is None and request_template is None:
+            raise ValueError(f"Batch item '{request_id}' must define Resource or RequestTemplate")
+        if request_template is not None and not isinstance(request_template, dict):
+            raise ValueError(f"RequestTemplate for '{request_id}' must be an object")
+        return {
+            "method": method,
+            "resource": resource,
+            "request_template": request_template,
+            "parent_ids": [str(x) for x in parent_ids],
+            "parameters": [str(x) for x in parameters],
+            "content": content,
+        }
+
+    def _execute_batch(self, payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        requests: Dict[str, Dict[str, Any]] = {}
+        for rid, raw in payload.items():
+            requests[str(rid)] = self._normalize_batch_request(str(rid), raw)
+
+        order = self._topological_order(requests)
+        batch_results: Dict[str, Any] = {}
+        failed_deps: Dict[str, bool] = {}
+
+        for rid in order:
+            req = requests[rid]
+            if any(failed_deps.get(pid, False) for pid in req["parent_ids"]):
+                batch_results[rid] = {
+                    "Status": 424,
+                    "Headers": {"Content-Type": "application/json"},
+                    "Content": {"Errors": ["Failed dependency"]},
+                }
+                failed_deps[rid] = True
+                continue
+
+            try:
+                resolved_params = [self._parse_json_path(p, batch_results) for p in req["parameters"]]
+                if req["request_template"] is not None:
+                    tpl = req["request_template"]
+                    tpl_resource = self._ci_get(tpl, "Resource")
+                    if tpl_resource is None:
+                        raise ValueError(f"RequestTemplate for '{rid}' must include Resource")
+                    tpl_content = self._ci_get(tpl, "Content", req["content"])
+                    count = self._batch_expand_count(resolved_params)
+                    sub_items = []
+                    statuses = []
+                    for idx in range(count):
+                        res = self._format_with_params(str(tpl_resource), resolved_params, idx)
+                        st, hdr, ctt = self._execute_internal_request(req["method"], res, tpl_content, batch_results)
+                        sub_items.append({"Status": st, "Headers": hdr, "Content": ctt})
+                        statuses.append(st)
+                    if not sub_items:
+                        final_status = 400
+                    elif len(set(statuses)) == 1:
+                        final_status = statuses[0]
+                    else:
+                        final_status = 207
+                    batch_results[rid] = {
+                        "Status": final_status,
+                        "Headers": {"Content-Type": "application/json"},
+                        "Content": {"Items": sub_items},
+                    }
+                else:
+                    resource = str(req["resource"])
+                    if resolved_params:
+                        resource = self._format_with_params(resource, resolved_params, 0)
+                    st, hdr, ctt = self._execute_internal_request(req["method"], resource, req["content"], batch_results)
+                    batch_results[rid] = {"Status": st, "Headers": hdr, "Content": ctt}
+                failed_deps[rid] = int(batch_results[rid]["Status"]) >= 400
+            except Exception as e:
+                batch_results[rid] = {
+                    "Status": 400,
+                    "Headers": {"Content-Type": "application/json"},
+                    "Content": {"Errors": [str(e)]},
+                }
+                failed_deps[rid] = True
+
+        return HTTPStatus.MULTI_STATUS, batch_results
+
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        query = parse_qs(parsed.query)
+        query_ci = {k.lower(): v for k, v in query.items()}
+
+        if path.startswith("/piwebapi") and not self._auth_ok():
+            self._unauthorized("Missing or invalid basic authentication credentials")
             return
+        status, payload = self._handle_get_internal(path, query_ci)
+        self._write_json(int(status), payload)
 
-        self._error(HTTPStatus.NOT_FOUND, f"Unsupported endpoint: {path}")
+    def do_POST(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        if path.startswith("/piwebapi") and not self._auth_ok():
+            self._unauthorized("Missing or invalid basic authentication credentials")
+            return
+        if path != "/piwebapi/batch":
+            self._error(HTTPStatus.NOT_FOUND, f"Unsupported endpoint: {path}")
+            return
+        ok, payload, err = self._batch_read_json()
+        if not ok:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"Errors": [err]})
+            return
+        if not isinstance(payload, dict):
+            self._write_json(HTTPStatus.BAD_REQUEST, {"Errors": ["Batch payload must be a JSON object"]})
+            return
+        try:
+            status, out = self._execute_batch(payload)
+        except ValueError as e:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"Errors": [str(e)]})
+            return
+        self._write_json(int(status), out)
 
     def log_message(self, fmt: str, *args) -> None:
         # Keep server logs concise while preserving useful request tracing.
