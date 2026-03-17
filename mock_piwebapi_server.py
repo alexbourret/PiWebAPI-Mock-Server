@@ -41,6 +41,7 @@ class Attribute:
     data_type: str = "Double"
     parent_attribute_web_id: Optional[str] = None
     children: List[str] = field(default_factory=list)
+    template_web_id: Optional[str] = None
 
 
 @dataclass
@@ -52,6 +53,29 @@ class Element:
     parent_web_id: Optional[str]
     children: List[str] = field(default_factory=list)
     attributes: List[str] = field(default_factory=list)
+    template_web_id: Optional[str] = None
+
+
+@dataclass
+class AttributeTemplate:
+    web_id: str
+    name: str
+    path: str
+    element_template_web_id: str
+    units: str
+    data_type: str = "Double"
+    parent_attribute_template_web_id: Optional[str] = None
+    children: List[str] = field(default_factory=list)
+
+
+@dataclass
+class ElementTemplate:
+    web_id: str
+    name: str
+    path: str
+    base_template_web_id: Optional[str] = None
+    attribute_templates: List[str] = field(default_factory=list)
+    child_element_templates: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -71,9 +95,99 @@ class PiWebApiDataModel:
         self.elements_by_path: Dict[Tuple[str, str], Element] = {}
         self.attributes_by_webid: Dict[str, Attribute] = {}
         self.attributes_by_path: Dict[str, Attribute] = {}
+        self.element_templates_by_webid: Dict[str, ElementTemplate] = {}
+        self.element_templates_by_name: Dict[str, ElementTemplate] = {}
+        self.attribute_templates_by_webid: Dict[str, AttributeTemplate] = {}
+        self.attribute_templates_by_path: Dict[str, AttributeTemplate] = {}
+        self.element_to_template: Dict[str, str] = {}
+        self.attribute_to_template: Dict[str, str] = {}
+
+        self._create_template_catalog()
 
         for db_name in db_names:
             self._create_database(db_name)
+
+    def _create_template_catalog(self) -> None:
+        equipment = self._create_element_template("TPL_EquipmentBase")
+        factory = self._create_element_template("TPL_FactoryRoot")
+        area = self._create_element_template("TPL_Area")
+        line = self._create_element_template("TPL_Line")
+        unit = self._create_element_template("TPL_Unit")
+        station = self._create_element_template("TPL_Station")
+        cell = self._create_element_template("TPL_Cell", base_template_name="TPL_Station")
+
+        self._create_attribute_template(equipment, "Status", "state", "Int32")
+        self._create_attribute_template(equipment, "Power_kW", "kW", "Double")
+        self._create_attribute_template(equipment, "Energy_kWh", "kWh", "Double")
+        temp_tpl = self._create_attribute_template(equipment, "Temperature_C", "degC", "Double")
+        self._create_attribute_template(
+            equipment,
+            "SensorOffset_C",
+            "degC",
+            "Double",
+            parent_attribute_template_web_id=temp_tpl.web_id,
+        )
+        self._create_attribute_template(equipment, "UniqueTag", "id", "Double")
+
+        self._create_attribute_template(cell, "Pressure_bar", "bar", "Double")
+        self._create_attribute_template(cell, "Flow_m3_h", "m3/h", "Double")
+        self._create_attribute_template(cell, "Vibration_mm_s", "mm/s", "Double")
+        self._create_attribute_template(cell, "Output_pct", "%", "Double")
+        self._create_attribute_template(cell, "QualityScore", "score", "Double")
+        self._create_attribute_template(cell, "Setpoint", "unit", "Double")
+
+        # Element template hierarchy hints for response completeness.
+        equipment.child_element_templates.extend(
+            [factory.web_id, area.web_id, line.web_id, unit.web_id]
+        )
+        unit.child_element_templates.append(station.web_id)
+        station.child_element_templates.append(cell.web_id)
+
+    def _create_element_template(
+        self, name: str, base_template_name: Optional[str] = None
+    ) -> ElementTemplate:
+        base_tpl = self.element_templates_by_name.get(base_template_name.lower()) if base_template_name else None
+        path = f"\\\\Templates\\Elements\\{name}"
+        web_id = self._mk_web_id("elementtemplate", path)
+        template = ElementTemplate(
+            web_id=web_id,
+            name=name,
+            path=path,
+            base_template_web_id=base_tpl.web_id if base_tpl else None,
+        )
+        self.element_templates_by_webid[web_id] = template
+        self.element_templates_by_name[name.lower()] = template
+        return template
+
+    def _create_attribute_template(
+        self,
+        element_template: ElementTemplate,
+        name: str,
+        units: str,
+        data_type: str,
+        parent_attribute_template_web_id: Optional[str] = None,
+    ) -> AttributeTemplate:
+        if parent_attribute_template_web_id:
+            parent = self.attribute_templates_by_webid[parent_attribute_template_web_id]
+            path = f"{parent.path}|{name}"
+        else:
+            path = f"{element_template.path}|{name}"
+        web_id = self._mk_web_id("attributetemplate", path)
+        attr_tpl = AttributeTemplate(
+            web_id=web_id,
+            name=name,
+            path=path,
+            element_template_web_id=element_template.web_id,
+            units=units,
+            data_type=data_type,
+            parent_attribute_template_web_id=parent_attribute_template_web_id,
+        )
+        self.attribute_templates_by_webid[web_id] = attr_tpl
+        self.attribute_templates_by_path[path.lower()] = attr_tpl
+        element_template.attribute_templates.append(web_id)
+        if parent_attribute_template_web_id:
+            self.attribute_templates_by_webid[parent_attribute_template_web_id].children.append(web_id)
+        return attr_tpl
 
     def _mk_web_id(self, kind: str, canonical: str) -> str:
         payload = f"{kind}|{canonical}".encode("utf-8")
@@ -110,9 +224,12 @@ class PiWebApiDataModel:
             path=root_path,
             database_web_id=db_web_id,
             parent_web_id=None,
+            template_web_id=self._resolve_element_template_for_name(root_name),
         )
         self.elements_by_webid[root_web_id] = root
         self.elements_by_path[(db_web_id, self._norm_path(root_path).lower())] = root
+        if root.template_web_id:
+            self.element_to_template[root.web_id] = root.template_web_id
 
         self._attach_attributes(root, is_leaf=False)
 
@@ -141,9 +258,12 @@ class PiWebApiDataModel:
             path=child_path,
             database_web_id=db_web_id,
             parent_web_id=parent.web_id,
+            template_web_id=self._resolve_element_template_for_name(name),
         )
         self.elements_by_webid[child_web_id] = child
         self.elements_by_path[(db_web_id, self._norm_path(child_path).lower())] = child
+        if child.template_web_id:
+            self.element_to_template[child.web_id] = child.template_web_id
         parent.children.append(child.web_id)
         return child
 
@@ -214,9 +334,16 @@ class PiWebApiDataModel:
             units=unit,
             data_type=data_type,
             parent_attribute_web_id=parent_attribute_web_id,
+            template_web_id=self._resolve_attribute_template_for_attribute(
+                element=element,
+                attr_name=attr_name,
+                parent_attribute_web_id=parent_attribute_web_id,
+            ),
         )
         self.attributes_by_webid[web_id] = attribute
         self.attributes_by_path[attr_path.lower()] = attribute
+        if attribute.template_web_id:
+            self.attribute_to_template[web_id] = attribute.template_web_id
         if parent_attribute_web_id:
             parent = self.get_attribute(parent_attribute_web_id)
             if parent:
@@ -237,6 +364,27 @@ class PiWebApiDataModel:
     def get_attribute(self, web_id: str) -> Optional[Attribute]:
         return self.attributes_by_webid.get(web_id)
 
+    def list_element_templates(self) -> List[ElementTemplate]:
+        return sorted(self.element_templates_by_webid.values(), key=lambda t: t.name)
+
+    def get_element_template(self, web_id: str) -> Optional[ElementTemplate]:
+        return self.element_templates_by_webid.get(web_id)
+
+    def get_attribute_template(self, web_id: str) -> Optional[AttributeTemplate]:
+        return self.attribute_templates_by_webid.get(web_id)
+
+    def list_element_templates_for_database(self, db_web_id: str) -> List[ElementTemplate]:
+        template_ids = set()
+        for elem in self.elements_by_webid.values():
+            if elem.database_web_id != db_web_id:
+                continue
+            if elem.template_web_id:
+                template_ids.add(elem.template_web_id)
+        return sorted(
+            [self.element_templates_by_webid[tid] for tid in template_ids],
+            key=lambda t: t.name,
+        )
+
     def find_element_by_path(self, db_web_id: str, path: str) -> Optional[Element]:
         return self.elements_by_path.get((db_web_id, self._norm_path(path).lower()))
 
@@ -251,6 +399,62 @@ class PiWebApiDataModel:
                 continue
             stack.extend(cur.children)
         return out
+
+    def element_template_lineage(self, element_template_web_id: str) -> List[ElementTemplate]:
+        lineage: List[ElementTemplate] = []
+        cur = self.get_element_template(element_template_web_id)
+        while cur is not None:
+            lineage.append(cur)
+            cur = self.get_element_template(cur.base_template_web_id) if cur.base_template_web_id else None
+        return list(reversed(lineage))
+
+    def effective_attribute_templates(self, element_template_web_id: str) -> List[AttributeTemplate]:
+        seen: Dict[str, AttributeTemplate] = {}
+        for et in self.element_template_lineage(element_template_web_id):
+            for at_id in et.attribute_templates:
+                at = self.get_attribute_template(at_id)
+                if not at:
+                    continue
+                key = f"{at.parent_attribute_template_web_id or ''}|{at.name.lower()}"
+                seen[key] = at
+        return list(seen.values())
+
+    def _resolve_element_template_for_name(self, element_name: str) -> Optional[str]:
+        txt = element_name.lower()
+        if txt.startswith("factory-"):
+            return self.element_templates_by_name["tpl_factoryroot"].web_id
+        if txt.startswith("area-"):
+            return self.element_templates_by_name["tpl_area"].web_id
+        if txt.startswith("line-"):
+            return self.element_templates_by_name["tpl_line"].web_id
+        if txt.startswith("unit-"):
+            return self.element_templates_by_name["tpl_unit"].web_id
+        if txt.startswith("station-"):
+            return self.element_templates_by_name["tpl_station"].web_id
+        if txt.startswith("cell-"):
+            return self.element_templates_by_name["tpl_cell"].web_id
+        return self.element_templates_by_name["tpl_equipmentbase"].web_id
+
+    def _resolve_attribute_template_for_attribute(
+        self,
+        element: Element,
+        attr_name: str,
+        parent_attribute_web_id: Optional[str],
+    ) -> Optional[str]:
+        if not element.template_web_id:
+            return None
+        effective = self.effective_attribute_templates(element.template_web_id)
+        target_name = "UniqueTag" if attr_name.startswith("UniqueTag_") else attr_name
+        parent_template_web_id: Optional[str] = None
+        if parent_attribute_web_id:
+            parent_template_web_id = self.attribute_to_template.get(parent_attribute_web_id)
+        for at in effective:
+            if at.name != target_name:
+                continue
+            if at.parent_attribute_template_web_id != parent_template_web_id:
+                continue
+            return at.web_id
+        return None
 
     def deterministic_value(self, attribute: Attribute, timestamp: datetime) -> float | int:
         ts_key = timestamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -363,6 +567,7 @@ class PiWebApiHandler(BaseHTTPRequestHandler):
             "Links": {
                 "Self": f"{base}/assetdatabases/{db.web_id}",
                 "Elements": f"{base}/assetdatabases/{db.web_id}/elements",
+                "ElementTemplates": f"{base}/assetdatabases/{db.web_id}/elementtemplates",
             },
         }
 
@@ -381,7 +586,7 @@ class PiWebApiHandler(BaseHTTPRequestHandler):
 
     def _element_item(self, elem: Element) -> dict:
         base = self._base_url()
-        return {
+        item = {
             "WebId": elem.web_id,
             "Id": elem.web_id,
             "Name": elem.name,
@@ -393,10 +598,16 @@ class PiWebApiHandler(BaseHTTPRequestHandler):
                 "Attributes": f"{base}/elements/{elem.web_id}/attributes",
             },
         }
+        if elem.template_web_id:
+            tpl = self.model.get_element_template(elem.template_web_id)
+            if tpl:
+                item["TemplateName"] = tpl.name
+                item["Links"]["Template"] = f"{base}/elementtemplates/{tpl.web_id}"
+        return item
 
     def _attribute_item(self, attr: Attribute) -> dict:
         base = self._base_url()
-        return {
+        item = {
             "WebId": attr.web_id,
             "Id": attr.web_id,
             "Name": attr.name,
@@ -409,6 +620,50 @@ class PiWebApiHandler(BaseHTTPRequestHandler):
                 "Attributes": f"{base}/attributes/{attr.web_id}/attributes",
                 "Value": f"{base}/streams/{attr.web_id}/value",
                 "RecordedData": f"{base}/streams/{attr.web_id}/recorded",
+            },
+        }
+        if attr.template_web_id:
+            tpl = self.model.get_attribute_template(attr.template_web_id)
+            if tpl:
+                item["TemplateName"] = tpl.name
+                item["Links"]["Template"] = f"{base}/attributetemplates/{tpl.web_id}"
+        return item
+
+    def _element_template_item(self, tpl: ElementTemplate) -> dict:
+        base = self._base_url()
+        item = {
+            "WebId": tpl.web_id,
+            "Id": tpl.web_id,
+            "Name": tpl.name,
+            "Path": tpl.path,
+            "BaseTemplate": "",
+            "Links": {
+                "Self": f"{base}/elementtemplates/{tpl.web_id}",
+                "AttributeTemplates": f"{base}/elementtemplates/{tpl.web_id}/attributetemplates",
+                "ElementTemplates": f"{base}/elementtemplates",
+            },
+        }
+        if tpl.base_template_web_id:
+            base_tpl = self.model.get_element_template(tpl.base_template_web_id)
+            if base_tpl:
+                item["BaseTemplate"] = base_tpl.name
+                item["BaseTemplateName"] = base_tpl.name
+                item["Links"]["BaseTemplate"] = f"{base}/elementtemplates/{base_tpl.web_id}"
+        return item
+
+    def _attribute_template_item(self, tpl: AttributeTemplate) -> dict:
+        base = self._base_url()
+        return {
+            "WebId": tpl.web_id,
+            "Id": tpl.web_id,
+            "Name": tpl.name,
+            "Path": tpl.path,
+            "Type": tpl.data_type,
+            "DefaultUnitsName": tpl.units,
+            "HasChildren": bool(tpl.children),
+            "Links": {
+                "Self": f"{base}/attributetemplates/{tpl.web_id}",
+                "AttributeTemplates": f"{base}/attributetemplates/{tpl.web_id}/attributetemplates",
             },
         }
 
@@ -563,6 +818,61 @@ class PiWebApiHandler(BaseHTTPRequestHandler):
                     items = [it for it in items if it is not None]
 
             self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
+            return
+
+        m = re.match(r"^/piwebapi/assetdatabases/([^/]+)/elementtemplates$", path)
+        if m:
+            db = self.model.get_database(m.group(1))
+            if not db:
+                self._error(HTTPStatus.NOT_FOUND, "Asset database not found")
+                return
+            items = [self._element_template_item(t) for t in self.model.list_element_templates_for_database(db.web_id)]
+            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
+            return
+
+        if path == "/piwebapi/elementtemplates":
+            items = [self._element_template_item(t) for t in self.model.list_element_templates()]
+            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
+            return
+
+        m = re.match(r"^/piwebapi/elementtemplates/([^/]+)/attributetemplates$", path)
+        if m:
+            tpl = self.model.get_element_template(m.group(1))
+            if not tpl:
+                self._error(HTTPStatus.NOT_FOUND, "Element template not found")
+                return
+            attr_tpls = self.model.effective_attribute_templates(tpl.web_id)
+            items = [self._attribute_template_item(t) for t in attr_tpls]
+            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
+            return
+
+        m = re.match(r"^/piwebapi/elementtemplates/([^/]+)$", path)
+        if m:
+            tpl = self.model.get_element_template(m.group(1))
+            if not tpl:
+                self._error(HTTPStatus.NOT_FOUND, "Element template not found")
+                return
+            self._write_json(HTTPStatus.OK, self._element_template_item(tpl))
+            return
+
+        m = re.match(r"^/piwebapi/attributetemplates/([^/]+)/attributetemplates$", path)
+        if m:
+            tpl = self.model.get_attribute_template(m.group(1))
+            if not tpl:
+                self._error(HTTPStatus.NOT_FOUND, "Attribute template not found")
+                return
+            items = [self._attribute_template_item(self.model.get_attribute_template(cid)) for cid in tpl.children]
+            items = [it for it in items if it is not None]
+            self._write_json(HTTPStatus.OK, {"Items": items, "Total": len(items)})
+            return
+
+        m = re.match(r"^/piwebapi/attributetemplates/([^/]+)$", path)
+        if m:
+            tpl = self.model.get_attribute_template(m.group(1))
+            if not tpl:
+                self._error(HTTPStatus.NOT_FOUND, "Attribute template not found")
+                return
+            self._write_json(HTTPStatus.OK, self._attribute_template_item(tpl))
             return
 
         m = re.match(r"^/piwebapi/elements/([^/]+)$", path)

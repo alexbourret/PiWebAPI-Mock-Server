@@ -4,6 +4,7 @@ Mock AVEVA / OSIsoft PI Web API server with:
 - 3 factory asset databases
 - realistic nested element hierarchies (average depth around 5)
 - child elements and attributes
+- element/attribute templates with base template inheritance
 - deterministic pseudo-random values over time
 - HTTP Basic authentication with multiple users
 
@@ -62,6 +63,11 @@ This yields thousands of elements and attributes across the 3 databases.
 - `GET /piwebapi/assetservers`
 - `GET /piwebapi/assetservers/{serverWebId}`
 - `GET /piwebapi/assetservers/{serverWebId}/assetdatabases`
+- `GET /piwebapi/elementtemplates`
+- `GET /piwebapi/elementtemplates/{elementTemplateWebId}`
+- `GET /piwebapi/elementtemplates/{elementTemplateWebId}/attributetemplates`
+- `GET /piwebapi/attributetemplates/{attributeTemplateWebId}`
+- `GET /piwebapi/assetdatabases/{dbWebId}/elementtemplates`
 - `GET /piwebapi/assetdatabases/{dbWebId}/elements`
 - `GET /piwebapi/assetdatabases/{dbWebId}/elements?path=\\Factory-North\\Factory-North\\Area-01\\Line-01\\Unit-01\\Station-01\\Cell-01`
 - `GET /piwebapi/elements/{elementWebId}`
@@ -81,6 +87,13 @@ Values are generated from:
 - timestamp
 
 So if you request the same attribute and same timestamp/time range twice, returned values are identical.
+
+## Template Notes
+
+- Elements expose `TemplateName` and `Links.Template`.
+- Attributes expose `TemplateName` and `Links.Template`.
+- At least one template has a base template (`BaseTemplateName` + `Links.BaseTemplate`), e.g.:
+  - `TPL_Cell` base template is `TPL_Station`
 
 ## Quick Example
 
